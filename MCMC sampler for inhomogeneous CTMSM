@@ -1,3 +1,8 @@
+### Author: Rosario Barone ###
+####################################################
+### MCMC sampler for inhomogeneous Markov CTMSMS ###
+####################################################
+
 MCMC_NHMarkov<-function(Y,Nstates,abs,KnownEnd,nsim,burnin){
   
   library(mvtnorm)
