@@ -1,0 +1,132 @@
+#### Author: Rosario Barone ####
+
+#############################################################################
+#### Auxiliary Functions: MCMC inference for inhomogeneous Markov models ####
+#############################################################################
+
+### Exponential process density with Gompertz link ###
+dexpprocess<-function(t,st,b0,b1,log){
+  f.par<-function(x){
+    exp(b0+b1*x)
+  }
+  if(isTRUE(log)){
+    return(b0+b1*(t+st)+(-(exp(b0+b1*(st+t))-exp(b0+b1*t)))/b1)
+    
+  }else{
+    return(exp(b0+b1*(t+st))*exp(-integrate(f.par,t,t+st)$value))
+  }
+}
+
+### Exponential process distribution function with Gompertz link ###
+pexpprocess<-function(t,st,b0,b1,log){
+  f.par<-function(x){
+    exp(b0+b1*x)
+  }
+  out=1-exp(-(exp(b0+b1*(st+t))-exp(b0+b1*t)))/b1)
+  if(isTRUE(log)) out<-log(out)
+  return(out)
+}
+
+
+
+
+
+
+### Uniformization function ###
+Fast_UniformSampl <- function(BgnSt,EndSt,TransMn,Tm,absorbing.state,Mx,PrbBgnEnd,TransM){
+  ptm1 <- proc.time()[1]
+  nSt<-dim(TransMn)[1]
+  rU <- runif(1)
+  ifelse(BgnSt==EndSt,cum <- dpois(0,Mx*Tm)/PrbBgnEnd,cum <- 0)
+  notExceed <- TRUE
+  if (cum>rU) { notExceed <- FALSE }
+  nJmp <- 0
+  ptm2 <- proc.time()[1]
+  while (notExceed){
+    nJmp <- nJmp+1 
+    prb <- dpois(nJmp,Mx*Tm)*TransMn[BgnSt,EndSt]/PrbBgnEnd
+    cum <- cum+prb
+    if (cum>rU) notExceed <- FALSE
+    if (nJmp==1) TransArr <- array(TransM,c(nSt,nSt,1))
+    if (nJmp!=1) TransArr <- array(c(TransArr,TransMn),c(nSt,nSt,nJmp))
+    TransMn <- TransMn%*%TransM
+  }
+  ptm3 <- proc.time()[1]
+  if (nJmp==0){
+    Path <- list()
+    Path$St <- c(BgnSt,EndSt)
+    Path$Tm <- c(0,Tm)
+    Path$ptm <- c(ptm2-ptm1,ptm3-ptm2)
+    return(Path)
+  }
+  if (nJmp==1){
+    if (BgnSt==EndSt){
+      Path <- list()
+      Path$St <- c(BgnSt,EndSt)
+      Path$Tm <- c(0,Tm)
+      Path$ptm <- c(ptm2-ptm1,ptm3-ptm2)
+      return(Path)
+    }
+    if (BgnSt!=EndSt){
+      Path <- list()
+      Path$St <- c(BgnSt,EndSt,EndSt)
+      Path$Tm <- c(0,Tm*runif(1),Tm)
+      Path$ptm <- c(ptm2-ptm1,ptm3-ptm2)
+      return(Path)
+    }
+  }
+  JmpTmV <- Tm*sort(runif(nJmp))
+  JmpStV <- rep(0,(nJmp-1))
+  Prb1 <- TransM[BgnSt,]
+  for (i in 1:(nJmp-1)){
+    Prb2Mat <- TransArr[,,(nJmp-i)]
+    Prb2 <- Prb2Mat[,EndSt]
+    JmpStV[i] <-
+      sample(1:nSt,size=1,replace=TRUE,round(Prb1*Prb2,digits=10))
+    Prb1 <- TransM[JmpStV[i],]
+  }
+  ptm3 <- proc.time()[1]
+  JmpStV <- c(JmpStV,EndSt)
+  TrueSub <- c(BgnSt,JmpStV[1:nJmp])!=c(JmpStV[1:nJmp],EndSt)
+  State.sequence<-c(BgnSt,JmpStV[TrueSub],EndSt)
+  Jump.times <-c(0,JmpTmV[TrueSub],Tm)
+  
+  if(EndSt==absorbing.state){
+    abs.state.visits = which(State.sequence==absorbing.state)
+    first.visit = abs.state.visits[1]
+    State.sequence.abs <- c(State.sequence[1:first.visit],absorbing.state)
+    Jump.times.abs <- c(Jump.times[1:first.visit],Tm)
+  }else{
+    abs.state.visits = which(State.sequence==absorbing.state) 
+    if(length(abs.state.visits)>0){
+      State.sequence.crude <- State.sequence[-abs.state.visits]
+      Jump.times.crude <- Jump.times[-abs.state.visits]
+      State.sequence.abs = NA
+      Jump.times.abs = NA
+      for(i in 2:(length(State.sequence.crude))){
+        a=State.sequence.crude[i]
+        b=State.sequence.crude[i-1]
+        t_a = Jump.times.crude[i]
+        if(a==b){
+          State.sequence.abs = c(State.sequence.abs,NA)
+          Jump.times.abs = c(Jump.times.abs,NA) 
+        }else{
+          State.sequence.abs = c(State.sequence.abs,a)
+          Jump.times.abs = c(Jump.times.abs,t_a) 
+        }
+      }
+      State.sequence.abs = c(BgnSt,na.omit(State.sequence.abs),EndSt)
+      Jump.times.abs = c(0,na.omit(Jump.times.abs),Tm)
+    }else{
+      State.sequence.abs <- State.sequence
+      Jump.times.abs <- Jump.times
+    }
+  }
+  
+  Path <- list()
+  Path$St <- State.sequence.abs
+  Path$Tm <- Jump.times.abs
+  Path$ptm <- c(ptm2-ptm1,ptm3-ptm2)
+  return(Path)
+  
+}
