@@ -1,0 +1,155 @@
+MCMC_NHMarkov<-function(Y,Nstates,abs,KnownEnd,nsim,burnin){
+  
+  library(mvtnorm)
+  library(extraDistr)
+  library(gtools)
+  
+  if(isTRUE(abs)) absorbing.state=Nstates
+  DiscreteChain<-Y
+  Chain<-Y
+  n = max(Chain[,1])
+  beta = array(NA, c(nsim,Nstates,2))
+  sigma=matrix(0,2,2)
+  diag(sigma)=0.01
+  if(Nstates>2){
+    Pij = array(NA, dim = c(Nstates,Nstates-1,nsim))
+  }else{
+    Pij = matrix(NA, nrow = nsim, ncol = Nstates)
+  }
+  if(Nstates>2){
+    PriorDirichletAlpha = matrix(1, ncol = Nstates-1)
+  }else{
+    PriorBeta = 1
+  }
+  #Starting values:
+  beta[1,,] = -0.5 
+  beta[1,Nstates,] = -Inf
+  if(Nstates>2){
+    Pij[,,1] = 1/(Nstates-1)
+  }else{
+    Pij[1,] = 1/(Nstates-1)
+  }
+  Ncurrent=matrix(1,Nstates,Nstates)
+  CheckAlgorithm = NULL
+  CrudeChain=NULL
+  Acceptance.rate.MHBetas = matrix(NA, nrow = nsim, ncol = Nstates)
+  for(current in 2:nsim){
+    if(current%%100==0){
+      print(paste("Discretely Observed Model - ITERATION",i))
+    }
+    if(i%%100==0){
+      if(current>burnin){
+        par(mfrow=c(2,2))
+        plot(beta[burnin:(current-1),1,1], type = "l")
+        plot(beta[burnin:(current-1),1,2], type = "l")
+        plot(beta[burnin:(current-1),2,1], type = "l")
+        plot(beta[burnin:(current-1),2,2], type = "l")
+        print(apply(beta[burnin:(current-1),,], 2:3, mean))
+        print(apply(Pij[,,burnin:(current-1)],1:2,mean))
+        
+      }else{
+        par(mfrow=c(2,2))
+        plot(beta[2:(current-1),1,1], type = "l")
+        plot(beta[2:(current-1),1,2], type = "l")
+        plot(beta[2:(current-1),2,1], type = "l")
+        plot(beta[2:(current-1),2,2], type = "l")
+        print(apply(beta[2:(current-1),,], 2:3, mean))
+        print(apply(Pij[,,2:(current-1)],1:2,mean))
+      }
+    }
+    
+    #Path Generation Setting
+    b = beta[current-1,,] 
+    p = Pij[,,current-1]
+    MultiStateModel = InhomogeneousMSM_sampler(b,p,Chain,DiscreteChain,absorbing.state,Nstates,current,KnownEnd)
+    Chain = MultiStateModel$Chain
+    NewCheck = MultiStateModel$ACCEPT
+    CheckAlgorithm = c(CheckAlgorithm,NewCheck)
+    CrudeChain = MultiStateModel$CrudeChain
+    # Compute the number of transitions between states
+    N <- matrix(0, nrow=Nstates, ncol=Nstates)
+    for(obs in 1:n){
+      States<-Chain[which(Chain[,1]==obs),2]
+      if(length(States)>1){
+        N.star = array(0, dim = c(Nstates,Nstates,length(States)-1))
+        for (h in 1: length(States)-1){
+          p = States[h]
+          j = States[h+1]
+          N.star[p,j,h] = 1
+        }
+        rows <- dim(N.star)[1]
+        cols <- dim(N.star)[2]
+        transitions <- matrix(0, nrow=rows, ncol=cols)
+        for (m in seq(rows)) {
+          for (g in seq(cols)) {
+            transitions[m,g] <- sum(N.star[m,g,])
+          }
+        }
+        N<-N+transitions
+      }else{
+        N<-N
+      }
+    }
+    Ncurrent = N
+
+    # Update sojourn times distribution parameters
+     for(j in 1:Nstates){
+      if(j == absorbing.state){
+        beta[current,j,] = -Inf 
+      }else{
+        
+        n_star<-which(Chain[,2]==j)
+        last.beta = beta[current-1,j,]
+        const = ((2.38^2)/2)
+        if(current>200){
+          sigma=cov(beta[(current-200):(current-1),j,])
+        }
+        beta.prop = rmvnorm(1,last.beta,const*sigma)
+        lnum<-NULL
+        lden<-NULL
+        for(obs in n_star){
+          if(Chain[obs,4]==1){
+            lnum = sum(lnum,log(1-pexpprocess(Chain[obs,5],Chain[obs,3],beta.prop[1],beta.prop[2],log = FALSE)))
+            lden = sum(lden,log(1-pexpprocess(Chain[obs,5],Chain[obs,3],last.beta[1],last.beta[2],log = FALSE)))
+          }else{
+            lnum= sum(lnum,dexpprocess(Chain[obs,5],Chain[obs,3],beta.prop[1],beta.prop[2],log=TRUE))
+            lden= sum(lden,dexpprocess(Chain[obs,5],Chain[obs,3],last.beta[1],last.beta[2],log=TRUE)) 
+          }
+        }
+        
+        prior.num<- dmvnorm(beta.prop,rep(0,2),diag(1000,2,2), log = TRUE) 
+        prior.den<- dmvnorm(last.beta,rep(0,2),diag(1000,2,2), log = TRUE)
+        
+        ACCEPT_rate= runif(1)<exp(lnum + prior.num -lden - prior.den)
+        
+        if(length(sub)==0) ACCEPT_rate = FALSE
+        Acceptance.rate.MHBetas[current,j]=ACCEPT_rate
+        
+        if (ACCEPT_rate){
+          beta[current,j,]= beta.prop
+        }else{
+          beta[current,j,] = last.beta
+        } 
+      }
+     }
+    #Update the transition probabilities
+    Npast = Ncurrent
+    for(d in 1:Nstates){
+      if(Nstates>2){
+        if(d==absorbing.state){
+          Pij[d,,current] = matrix(0, nrow = (Nstates-1))
+        }else{
+          Pij[d,,current] = rdirichlet(1, PriorDirichletAlpha + Npast[d,-d])
+        }  
+      }else{
+        Pij[current,d] = 1
+      }
+    }
+  }
+  MCMC<-list()
+  MCMC$beta<-beta[-(1:burnin),,]
+  MCMC$Pij<-Pij[,,-(1:burnin)]
+  MCMC$AcceptanceRateMH<-sum(CheckAlgorithm)/length(CheckAlgorithm)
+  MCMC$AcceptanceRateBetas<-apply(Acceptance.rate.MHBetas[-(1:burnin),],2,sum)/nsim
+  return(MCMC)
+}
