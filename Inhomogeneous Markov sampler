@@ -1,0 +1,359 @@
+### Author: Rosario Barone ####
+
+#######################################################################
+### Metropolis-Hastings for time-inhomogeneous Markov path sampling ###
+#######################################################################
+
+InhomogeneousMSM_sampler <-function(beta,p,Chain,DiscreteChain,absorbing.state,Nstates,iter,KnownEnd){
+  
+  n=max(DiscreteChain[,1])
+  tstar<-mean(DiscreteChain[which(DiscreteChain[,2]==absorbing.state),5])/2
+  if(isTRUE(KnownEnd)){
+    Save<-DiscreteChain[which(DiscreteChain[,2]==absorbing.state),]
+    DiscreteChain<-DiscreteChain[-which(DiscreteChain[,2]==absorbing.state),]
+    SaveOld<-Chain[which(Chain[,2]==absorbing.state),]
+    Chain<-Chain[-which(Chain[,2]==absorbing.state),]
+  }
+  ACC.LIST = NULL
+  NewChain<-NULL
+  
+  ############# Rate M ##############
+  Rateii = rep(NA,Nstates)
+  RateM = matrix(NA, nrow = Nstates, ncol = Nstates)
+  Rateij = matrix(NA, nrow = Nstates, ncol = Nstates-1)
+  for(j in 1:Nstates){
+    Rateii[j]=exp(beta[j,1])
+  }
+  for(v in 1: Nstates){
+    Rateij[v,] = p[v,]*Rateii[v]
+    RateM[v,v] = -Rateii[v]
+    RateM[v,-v] = Rateij[v,]
+  }
+  
+  ## Diagonalization of rate matrix
+  Eigen <- eigen(RateM)
+  Lam <- Eigen$values
+  U <- Eigen$vectors
+  InvU <- solve(U)
+  
+  for (z in 1:n){
+    
+    Full_ObsSt = DiscreteChain[which(DiscreteChain[,1]==z),2]
+    Full_Interval = DiscreteChain[which(DiscreteChain[,1]==z),3]
+    Interval = Full_Interval
+    ObsSt = Full_ObsSt 
+    
+    if(iter==2){
+      
+      NS = ObsSt[1]
+      NJ = 0
+      Jt = NULL
+      
+      if(length(ObsSt)>1){
+        for(i in 1:(length(ObsSt)-1)){
+          
+          BgnSt = ObsSt[i]
+          EndSt = ObsSt[i+1]
+          Tm    = Interval[i]
+          Jt = sum(Jt,Tm)
+          
+          PrbBgnEnd <- (U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,EndSt]
+          if (is.complex(PrbBgnEnd)){
+            PrbBgnEnd = Re(PrbBgnEnd)
+          }
+          ## Determine max diagonal entry and construct transition matrix
+          nSt <- nrow(RateM)
+          Mx <- max(-diag(RateM))
+          TransM <- diag(rep(1,times=nSt))+RateM/Mx
+          TransMn <- TransM
+          
+          Uniformization = Fast_UniformSampl(BgnSt,EndSt,TransMn,Tm,absorbing.state,Mx,PrbBgnEnd,TransM)
+          
+          NewStates = Uniformization$St
+          NewJumps  = Uniformization$Tm
+        
+          if(length(NewStates)>2){
+            NEW = NewStates[2:(length(NewStates)-1)]
+            NewStatesInterval = c(NA,NEW)
+            NewST = diff(NewJumps)
+            NewSojournTimesInterval = NewST 
+            NS = c(NS, NewStatesInterval)
+            NJ = c(NJ, NewSojournTimesInterval)
+          }else{
+            NewStatesInterval = NA
+            NewSojournTimesInterval = Tm
+            NS = c(NS, NewStatesInterval)
+            NJ = c(NJ,NewSojournTimesInterval)
+          }
+          
+        }
+        
+      }
+      
+      if(isTRUE(KnownEnd)){
+        
+        BgnSt = ObsSt[length(ObsSt)]
+        Tm    = Interval[length(Interval)]
+        PrS<-NULL
+        for (prs in 1:(Nstates-1)){
+          PrS<-c(PrS,(U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,prs]*p[prs,(Nstates-1)])
+        }
+        EndSt = sample(1:(Nstates-1),size=1,prob=PrS/sum(PrS))
+        Jt = sum(Jt,Tm)
+        
+        PrbBgnEnd <- (U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,EndSt]
+        if (is.complex(PrbBgnEnd)){
+          PrbBgnEnd = Re(PrbBgnEnd)
+        }
+        nSt <- nrow(RateM)
+        Mx <- max(-diag(RateM))
+        TransM <- diag(rep(1,times=nSt))+RateM/Mx
+        TransMn <- TransM
+        
+        
+        
+        Uniformization = Fast_UniformSampl(BgnSt,EndSt,TransMn,Tm,absorbing.state,Mx,PrbBgnEnd,TransM)
+        
+        NewStates = Uniformization$St
+        NewJumps  = Uniformization$Tm
+        
+        if(length(NewStates)>2){
+          NEW = NewStates[2:(length(NewStates)-1)]
+          NewStatesInterval = c(NA,NEW)
+          NewST = diff(NewJumps)
+          NewSojournTimesInterval = NewST 
+          NS = c(NS, NewStatesInterval)
+          NJ = c(NJ, NewSojournTimesInterval)
+        }else{
+          NewStatesInterval = NA
+          NewSojournTimesInterval = Tm
+          NS = c(NS, NewStatesInterval)
+          NJ = c(NJ,NewSojournTimesInterval)
+        }
+        
+      }
+      
+      CrudeChain = cbind(NS, NJ)
+      NewS = NA
+      NewSojournTimes = NA
+      
+      for(i in 1:dim(CrudeChain)[1]){
+        state = CrudeChain[i,1]
+        time  = CrudeChain[i,2]
+        if(is.na(state)){
+          last = NewSojournTimes[length(NewSojournTimes)]
+          NewSojournTimes[length(NewSojournTimes)] = time + last
+        }else{
+          NewS = c(NewS,state)
+          NewSojournTimes = c(NewSojournTimes,time)
+        }
+      }
+      
+      NewS = as.vector(NewS[-1])
+      NewSojournTimes = as.vector(NewSojournTimes[-1])
+      NEWJUMPS = length(NewS)
+      new.jump.times<-c(0,cumsum(NewSojournTimes)[-length(cumsum(NewSojournTimes))])
+      if(absorbing.state%in%Full_ObsSt){
+        NewS<-c(NewS,absorbing.state)
+        new.jump.times<-c(new.jump.times,sum(NewSojournTimes))
+        NewSojournTimes<-c(NewSojournTimes,Inf)
+      }
+      if(isTRUE(KnownEnd)){
+        id<-rep(z,length(NewS))
+        cens.New.obs = rep(0, length(NewS))
+        if(length(which(Save[,1]==z))==0) cens.New.obs[length(NewS)]=1
+        PropChain = cbind(id,NewS,NewSojournTimes,cens.New.obs,new.jump.times)
+        PropChain<-rbind(PropChain,Save[which(Save[,1]==z),])
+      }else{
+        id<-rep(z,length(NewS))
+        cens.New.obs = rep(0, length(NewS))
+        cens.New.obs[length(NewS)] = 1
+        PropChain = cbind(id,NewS,NewSojournTimes,cens.New.obs,new.jump.times) 
+      }
+      NewChain<-rbind(NewChain,PropChain)
+      
+    }else{
+      
+      OldChain = Chain[which(Chain[,1]==z),]
+      if(is.null(dim(OldChain))){
+        dim(OldChain)<-c(1,5)
+      }
+      
+      NS = ObsSt[1]
+      NJ = 0
+      Jt = NULL
+      
+      if(length(ObsSt)>1){
+        for(i in 1:(length(ObsSt)-1)){
+          
+          BgnSt = ObsSt[i]
+          EndSt = ObsSt[i+1]
+          Tm    = Interval[i]
+          Jt = sum(Jt,Tm)
+          
+          PrbBgnEnd <- (U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,EndSt]
+          if (is.complex(PrbBgnEnd)){
+            PrbBgnEnd = Re(PrbBgnEnd)
+          }
+          ## Determine max diagonal entry and construct transition matrix
+          nSt <- nrow(RateM)
+          Mx <- max(-diag(RateM))
+          TransM <- diag(rep(1,times=nSt))+RateM/Mx
+          TransMn <- TransM
+          
+          Uniformization = Fast_UniformSampl(BgnSt,EndSt,TransMn,Tm,absorbing.state,Mx,PrbBgnEnd,TransM)
+          
+          NewStates = Uniformization$St
+          NewJumps  = Uniformization$Tm
+          
+          if(length(NewStates)>2){
+            NEW = NewStates[2:(length(NewStates)-1)]
+            NewStatesInterval = c(NA,NEW)
+            NewST = diff(NewJumps)
+            NewSojournTimesInterval = NewST 
+            NS = c(NS, NewStatesInterval)
+            NJ = c(NJ, NewSojournTimesInterval)
+          }else{
+            NewStatesInterval = NA
+            NewSojournTimesInterval = Tm
+            NS = c(NS, NewStatesInterval)
+            NJ = c(NJ,NewSojournTimesInterval)
+          }
+          
+        }
+        
+      }
+      
+      if(isTRUE(KnownEnd)){
+        
+        BgnSt = ObsSt[length(ObsSt)]
+        Tm    = Interval[length(Interval)]
+        PrS<-NULL
+        for (prs in 1:(Nstates-1)){
+          PrS<-c(PrS,(U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,prs]*p[prs,(Nstates-1)])
+        }
+        EndSt = sample(1:(Nstates-1),size=1,prob=PrS/sum(PrS))
+        Jt = sum(Jt,Tm)
+        
+        PrbBgnEnd <- (U%*%diag(exp(Tm*Lam))%*%InvU)[BgnSt,EndSt]
+        if (is.complex(PrbBgnEnd)){
+          PrbBgnEnd = Re(PrbBgnEnd)
+        }
+        ## Determine max diagonal entry and construct transition matrix
+        nSt <- nrow(RateM)
+        Mx <- max(-diag(RateM))
+        TransM <- diag(rep(1,times=nSt))+RateM/Mx
+        TransMn <- TransM
+        
+        
+        
+        Uniformization = Fast_UniformSampl(BgnSt,EndSt,TransMn,Tm,absorbing.state,Mx,PrbBgnEnd,TransM)
+        
+        NewStates = Uniformization$St
+        NewJumps  = Uniformization$Tm
+        
+        if(length(NewStates)>2){
+          NEW = NewStates[2:(length(NewStates)-1)]
+          NewStatesInterval = c(NA,NEW)
+          NewST = diff(NewJumps)
+          NewSojournTimesInterval = NewST 
+          NS = c(NS, NewStatesInterval)
+          NJ = c(NJ, NewSojournTimesInterval)
+        }else{
+          NewStatesInterval = NA
+          NewSojournTimesInterval = Tm
+          NS = c(NS, NewStatesInterval)
+          NJ = c(NJ,NewSojournTimesInterval)
+        }
+        
+      }
+      
+      CrudeChain = cbind(NS, NJ)
+      NewS = NA
+      NewSojournTimes = NA
+      
+      for(i in 1:dim(CrudeChain)[1]){
+        state = CrudeChain[i,1]
+        time  = CrudeChain[i,2]
+        if(is.na(state)){
+          last = NewSojournTimes[length(NewSojournTimes)]
+          NewSojournTimes[length(NewSojournTimes)] = time + last
+        }else{
+          NewS = c(NewS,state)
+          NewSojournTimes = c(NewSojournTimes,time)
+        }
+      }
+      
+      NewS = as.vector(NewS[-1])
+      NewSojournTimes = as.vector(NewSojournTimes[-1])
+      NEWJUMPS = length(NewS)
+      new.jump.times<-c(0,cumsum(NewSojournTimes)[-length(cumsum(NewSojournTimes))])
+      if(absorbing.state%in%Full_ObsSt){
+        NewS<-c(NewS,absorbing.state)
+        new.jump.times<-c(new.jump.times,sum(NewSojournTimes))
+        NewSojournTimes<-c(NewSojournTimes,Inf)
+      }
+      
+      id<-rep(z,length(NewS))
+      cens.New.obs = rep(0, length(NewS))
+      if(length(which(Save[,1]==z))==0) cens.New.obs[length(NewS)] = 1 
+      if(isFALSE(KnownEnd)) cens.New.obs[length(NewS)] = 1 
+      PropChain = cbind(id,NewS,NewSojournTimes,cens.New.obs,new.jump.times)
+      
+      lnum<-NULL
+      for(t in 1:dim(PropChain)[1]){
+        if(PropChain[t,2]==absorbing.state){
+          lnum<-sum(lnum,0)
+        }else{
+          if(PropChain[t,4]==1){
+            q.rate <-exp(beta[PropChain[t,2],1]) 
+            lnum<-sum(lnum,log(1-pexpprocess(PropChain[t,5],PropChain[t,3],beta[PropChain[t,2],1],beta[PropChain[t,2],2],log=FALSE)) - log(1-pexp(PropChain[t,3],q.rate, log.p = FALSE)) ) 
+            
+          }else{
+            q.rate <- exp(beta[PropChain[t,2],1])
+            lnum<-sum(lnum,dexpprocess(PropChain[t,5],PropChain[t,3],beta[PropChain[t,2],1],beta[PropChain[t,2],2],log = TRUE)-dexp(PropChain[t,3],q.rate,log=TRUE)) 
+          }
+        }
+      }
+      
+      lden<-NULL
+      for(t in 1:dim(OldChain)[1]){
+        if(OldChain[t,2]==absorbing.state){
+          lden<-sum(lden,0)
+        }else{
+          if(OldChain[t,4]==1){
+            q.rate<-exp(beta[OldChain[t,2],1]) 
+            lden<-sum(lden,log(1-pexp(OldChain[t,3],q.rate,log.p = FALSE))-log(1-pexpprocess(OldChain[t,5],OldChain[t,3],beta[OldChain[t,2],1],beta[OldChain[t,2],2],log=FALSE)))
+            
+          }else{
+            
+            q.rate <- exp(beta[OldChain[t,2],1])
+            lden<-sum(lden,dexp(OldChain[t,3],q.rate, log=TRUE)-dexpprocess(OldChain[t,5],OldChain[t,3],beta[OldChain[t,2],1],beta[OldChain[t,2],2],log = TRUE)) 
+            
+          }
+        }
+      }
+      
+      ACCEPT=runif(1)<exp(lnum+lden)
+      
+      if(isTRUE(KnownEnd)){
+        PropChain<-rbind(PropChain,Save[which(Save[,1]==z),])
+        OldChain<-rbind(OldChain,SaveOld[which(SaveOld[,1]==z),])
+      }
+      
+      if(ACCEPT){
+        NewChain<-rbind(NewChain,PropChain)
+      }else{
+        NewChain<-rbind(NewChain,OldChain)
+        
+      }
+      
+      ACC.LIST = c(ACC.LIST, ACCEPT)
+    }
+  }
+  MultiStatePath<-list()
+  MultiStatePath$Chain<-NewChain
+  MultiStatePath$ACCEPT<-ACC.LIST
+  return(MultiStatePath)
+  
+}
