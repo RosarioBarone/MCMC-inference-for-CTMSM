@@ -1,0 +1,67 @@
+#### Author: Rosario Barone ####
+### R code
+
+###########################################
+#### Time-inhomogeneous data generator ####
+###########################################
+
+
+## Generate panel discretely observed continuous-time inhomogeneous Markov models (Gompertz link)
+
+#beta0 = intercept
+#beta1 = time coefficient
+#P = transition prob. matrix of dimension Sx(S-1)
+
+rDCTNHMC=function(beta0,beta1,P,n,times){
+  PD=NULL; S=ncol(P)
+  for (i in 1:n){
+    times2=times
+    ys=integer(length(times))+1
+    state=1
+    T=0
+    while(T<max(times)){
+      state.old=state
+      T.old=T
+      if (beta1[state.old]>0){
+        k=exp(beta0[state.old]+beta1[state.old]*T.old)/beta1[state.old]
+        T=T+(1/beta1[state.old])*log(1-1/k*log(1-runif(1)) )
+        ys[T.old<times & times<T]=state.old
+        state=sample(1:S,size=1,prob=P[state.old,])
+        if (state==S) {ys[times>T]=S
+        times2[times>T]=T
+        T=max(times)+1}
+      }
+      
+      if (beta1[state.old]<0){
+        k=exp(beta0[state.old]+beta1[state.old]*T.old)/beta1[state.old]
+        if (runif(1)<exp(k)) {T=Inf}
+        else
+        {
+          T=T+(1/beta1[state.old])*log(-1/k*log( 1+(1-exp(k))/exp(k)*(1-runif(1)) ) )
+        }
+        
+        ys[T.old<times & times<T]=state.old
+        state=sample(1:S,size=1,prob=P[state.old,])
+        if (state==S) {ys[times>T]=S
+        times2[times>T]=T
+        T=max(times)+1}
+      }
+      
+      
+    }
+    
+    if(length(which(ys==S))>0) ys<-ys[1:which(ys==S)[1]]
+    A=cbind(id=rep(i,length(ys)),state=ys,sojourntimes=c(diff(times2[1:length(ys)]),max(times)-times2[length(ys)]),lastobs=c(rep(0,(length(ys)-1)),1),time=times2[1:length(ys)])
+    if(A[dim(A)[1],2]==S) A[dim(A)[1],3]=Inf
+    PD=rbind(PD,A)}
+  return(as.data.frame(PD))
+}
+
+
+### Real data available on "msm" package
+install.packages("msm")
+library("msm")
+data<-cav
+
+
+
